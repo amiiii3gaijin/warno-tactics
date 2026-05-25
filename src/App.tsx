@@ -325,8 +325,8 @@ export default function App() {
     return raw ? JSON.parse(raw) : { ...DEFAULT_SETTINGS };
   });
 
-  // Current main workspace: 'menu' (Welcome lobby console), 'select' (Select Division), 'editor' (Edit config), 'settings' (Sound config), 'dash' (Simulator Board)
-  const [currentView, setCurrentView] = useState<'menu' | 'select' | 'editor' | 'settings' | 'dash'>('menu');
+  // Current main workspace: 'menu' (Welcome lobby console), 'select' (Select Division), 'editor' (Edit config), 'settings' (Sound config), 'dash' (Simulator Board), 'summary'
+  const [currentView, setCurrentView] = useState<'menu' | 'select' | 'editor' | 'settings' | 'dash' | 'summary'>('menu');
   const [selectedDivIdx, setSelectedDivIdx] = useState<number | null>(null);
 
   // Editor sub views: 'master' (Div list), 'detail' (Div details), 'timers' (Timers), 'library' (Global library)
@@ -352,9 +352,10 @@ export default function App() {
   } | null>(null);
 
   // Popup overlay queues
-  const [modalQueue, setModalQueue] = useState<{ title: string; items: string[]; tts: string; level: number; isTimer?: boolean; timestamp?: number }[]>([]);
-  const [activeChecklist, setActiveChecklist] = useState<{ title: string; items: { id: number; text: string; done: boolean }[]; level: number; tts: string; isTimer?: boolean } | null>(null);
+  const [modalQueue, setModalQueue] = useState<{ title: string; items: string[]; tts: string; level: number; isTimer?: boolean; timestamp?: number; sourceType?: 'active' | 'passive' | 'timer' }[]>([]);
+  const [activeChecklist, setActiveChecklist] = useState<{ title: string; items: { id: number; text: string; done: boolean }[]; level: number; tts: string; isTimer?: boolean; spawnTime?: number; sourceType?: 'active' | 'passive' | 'timer' } | null>(null);
   const [libPickerOpen, setLibPickerOpen] = useState<'active' | 'passive' | null>(null);
+  const [selectedLibItemIds, setSelectedLibItemIds] = useState<string[]>([]);
   const [confirmModal, setConfirmModal] = useState<{ msg: string; yesText: string; onConfirm: () => void } | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
   const [importDetails, setImportDetails] = useState<{
@@ -395,6 +396,71 @@ export default function App() {
   // Global horizontal swipe detector for "Back"
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
+
+  const [sessionStats, setSessionStats] = useState<{
+    startTime: number;
+    activeProcessed: number;
+    passiveProcessed: number;
+    timerProcessed: number;
+    responseTimeMsList: number[];
+    skippedProcessed: number;
+    actionRecords: Record<string, {
+      title: string;
+      sourceType: 'active' | 'passive' | 'timer';
+      shownCount: number;
+      completedCount: number;
+      skippedCount: number;
+      responseTimes: number[];
+      completionRates: number[];
+      totalItems: number;
+    }>;
+  } | null>(null);
+
+  const handleCloseActiveChecklist = (completed: boolean) => {
+    if (activeChecklist && sessionStats && activeChecklist.spawnTime) {
+      const timeSpent = Date.now() - activeChecklist.spawnTime;
+      const checkedCount = activeChecklist.items.filter(it => it.done).length;
+      const totalCount = activeChecklist.items.length;
+      const compRate = totalCount > 0 ? checkedCount / totalCount : (completed ? 1 : 0);
+      
+      setSessionStats(prev => {
+        if (!prev) return prev;
+        const next = { ...prev, responseTimeMsList: [...prev.responseTimeMsList], actionRecords: { ...prev.actionRecords } };
+        
+        const titleKey = activeChecklist.title;
+        if (!next.actionRecords[titleKey]) {
+          next.actionRecords[titleKey] = {
+            title: titleKey,
+            sourceType: activeChecklist.sourceType || 'active',
+            shownCount: 0,
+            completedCount: 0,
+            skippedCount: 0,
+            responseTimes: [],
+            completionRates: [],
+            totalItems: totalCount
+          };
+        }
+        
+        next.actionRecords[titleKey].shownCount++;
+        next.actionRecords[titleKey].responseTimes.push(timeSpent);
+        next.actionRecords[titleKey].completionRates.push(compRate);
+
+        if (completed) {
+          next.responseTimeMsList.push(timeSpent);
+          next.actionRecords[titleKey].completedCount++;
+
+          if (activeChecklist.sourceType === 'active') next.activeProcessed++;
+          else if (activeChecklist.sourceType === 'passive') next.passiveProcessed++;
+          else if (activeChecklist.sourceType === 'timer') next.timerProcessed++;
+        } else {
+          next.skippedProcessed++;
+          next.actionRecords[titleKey].skippedCount++;
+        }
+        return next;
+      });
+    }
+    setActiveChecklist(null);
+  }
 
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
@@ -468,7 +534,7 @@ export default function App() {
         if (!t.enabled) return;
         const intervalMs = t.intervalMin * 60000;
         const timerId = setInterval(() => {
-          triggerModalCheck(`[全域监控例行检查] ${t.name}`, t.items, t.tts, t.level, true);
+          triggerModalCheck(`[全域监控例行检查] ${t.name}`, t.items, t.tts, t.level, true, 'timer');
         }, intervalMs);
         activeIntervals.current.push(timerId);
       });
@@ -498,7 +564,9 @@ export default function App() {
         items: next.items.map((it, idx) => ({ id: idx, text: it, done: false })),
         level: next.level,
         tts: next.tts,
-        isTimer: next.isTimer
+        isTimer: next.isTimer,
+        sourceType: next.sourceType,
+        spawnTime: Date.now()
       });
 
       playSynthSound('alarm');
@@ -548,7 +616,7 @@ export default function App() {
     });
   };
 
-  const triggerModalCheck = (title: string, items: string[], tts: string, level: number, isTimer?: boolean) => {
+  const triggerModalCheck = (title: string, items: string[], tts: string, level: number, isTimer?: boolean, sourceType: 'active' | 'passive' | 'timer' = 'active') => {
     // 巡检定时任务的精密幂等性控制与防事件堆叠引擎 (外层浅校验)
     const isDuplicate = modalQueue.some(item => item.title.trim() === title.trim()) || 
                         (activeChecklist && activeChecklist.title.trim() === title.trim());
@@ -566,7 +634,7 @@ export default function App() {
         return prev;
       }
       
-      const newQueue = [...prev, { title, items, tts, level, isTimer, timestamp: Date.now() }];
+      const newQueue = [...prev, { title, items, tts, level, isTimer, timestamp: Date.now(), sourceType }];
       
       // 按 重要程度(level) 和 时间顺序(timestamp) 排序
       newQueue.sort((a, b) => {
@@ -614,16 +682,24 @@ export default function App() {
     setCurrentView('dash');
     playSynthSound('success');
     speakTTS(`模拟雷达防御区已启动。正在连接至 ${appData.divisions[divIdx].name}`);
+    setSessionStats({
+      startTime: Date.now(),
+      activeProcessed: 0,
+      passiveProcessed: 0,
+      timerProcessed: 0,
+      responseTimeMsList: [],
+      skippedProcessed: 0,
+      actionRecords: {},
+    });
   };
 
   // Point 5: "退出模拟" straight forward action - no annoying confirm prompts on simply backing
   const handleExitCombat = () => {
     playSynthSound('confirm');
-    setCurrentView('select');
-    setSelectedDivIdx(null);
+    setCurrentView('summary');
     setModalQueue([]);
     setActiveChecklist(null);
-    speakTTS("模拟区脱开。连接返回大厅。");
+    speakTTS("模拟区脱开。正在生成战训评估报告。");
   };
 
   // ================= MULTI-LEVEL HIGH PERFORMANCE HOT SYNC (Point 6 & 7) =================
@@ -1062,18 +1138,28 @@ export default function App() {
   };
 
   // ================= HELPER TRIGGERS =================
-  const handlePickFromLibrary = (libItem: ActionItem) => {
-    if (editingDivIdx === null) return;
-    const cloned: ActionItem = JSON.parse(JSON.stringify(libItem));
-    cloned.id = "act-imported-" + Date.now();
-
+  const handlePickFromLibrary = () => {
+    if (editingDivIdx === null || selectedLibItemIds.length === 0) return;
+    
     const nextDivs = [...appData.divisions];
     const targetListName = libPickerOpen || 'active';
-    nextDivs[editingDivIdx][targetListName].push(cloned);
+    let addedCount = 0;
+
+    selectedLibItemIds.forEach(id => {
+      const libItem = appData.library.find(i => i.id === id);
+      if (libItem) {
+        const cloned: ActionItem = JSON.parse(JSON.stringify(libItem));
+        cloned.id = "act-imported-" + Date.now() + "-" + Math.random().toString(36).substring(2, 7);
+        nextDivs[editingDivIdx][targetListName].push(cloned);
+        addedCount++;
+      }
+    });
+
     setAppData(p => ({ ...p, divisions: nextDivs }));
 
     setLibPickerOpen(null);
-    addLog(`成功自公共战备资料大纲中调任并拼接克隆了指令: 「${cloned.name}」`, "SUCCESS");
+    setSelectedLibItemIds([]);
+    addLog(`成功自公共战备资料大纲中批量调任并拼接克隆了 ${addedCount} 个指令`, "SUCCESS");
     playSynthSound('success');
   };
 
@@ -1485,7 +1571,7 @@ export default function App() {
                 T.A.C.T.I.C.S
               </h2>
               <div className="pt-2 text-xs sm:text-sm font-bold tracking-[0.15em] text-[#00ffff] font-mono select-none">
-                行动检查单 // V7.0 FINAL
+                行动检查单 // 只因木约八十日盈
               </div>
             </div>
 
@@ -1756,6 +1842,330 @@ export default function App() {
 
           </div>
         )}
+
+        {/* ================= VIEW: SESSION SUMMARY ================= */}
+        {currentView === 'summary' && sessionStats && (() => {
+          // ================= [算法驱动] 数据清洗与准备 =================
+          const division = selectedDivIdx !== null ? appData.divisions[selectedDivIdx] : null;
+          let allActions: { name: string; type: string }[] = [];
+          
+          if (division) {
+            const uniqueNames = new Set<string>();
+            const sources = [
+               ...division.active.map(a => ({ name: a.name, type: '主动' })),
+               ...division.passive.map(a => ({ name: a.name, type: '被动' })),
+               ...appData.globalTimers.map(t => ({ name: t.name, type: '轮询定时' }))
+            ];
+            
+            sources.forEach(a => {
+               if (!uniqueNames.has(a.name)) {
+                  uniqueNames.add(a.name);
+                  allActions.push(a);
+               }
+            });
+          }
+
+          // ================= [算法驱动] 评级核心算法计算 =================
+          const rankings = allActions.map(action => {
+            const record = sessionStats.actionRecords[action.name];
+            
+            if (!record || record.shownCount === 0) {
+               return {
+                  name: action.name, type: action.type,
+                  shown: 0, completed: 0, skipped: 0, avgTime: 'N/A',
+                  rawScore: 0,
+                  grade: 'C',
+                  scoreColor: 'text-gray-500', bgColor: 'bg-black border-gray-900/50',
+                  verdict: '冷板凳指令，占坑未用，需要考虑裁剪',
+                  detailsStr: ''
+               };
+            }
+
+            const shownCount = record.shownCount;
+            // MCT (Mean Completion Time) 预期基准：每项需至少 1.0 秒的识别认知时间
+            const expectedTimePerItem = 1.0; 
+            const avgTimeSec = record.responseTimes.reduce((a, b) => a + b, 0) / record.responseTimes.length / 1000;
+            const avgItems = record.totalItems || 1;
+            const expectedTotalTime = avgItems * expectedTimePerItem;
+            
+            const timeRatio = avgTimeSec / expectedTotalTime; // 用时适中度
+
+            // 半途而废率计算
+            let abandonCount = 0;
+            record.completionRates.forEach(r => {
+               if (r < 1.0) abandonCount++; 
+            });
+            const abandonRate = abandonCount / shownCount;
+            
+            let grade = 'B';
+            let verdict = '';
+            let rawScore = 0;
+            let scoreColor = 'text-white';
+            let bgColor = 'bg-cyan-950/20 border-cyan-900/50';
+            
+            if (timeRatio < 0.3 && avgItems >= 2) {
+                // 彻底击穿底线：常态化盲点 (耗时低于 MCT 30%)
+                grade = 'F';
+                verdict = '毒性盲点指令，占用视线毫无卵用，极度建议删除';
+                scoreColor = 'text-red-500';
+                bgColor = 'bg-red-950/30 border-red-900';
+                rawScore = Math.floor(timeRatio * 50); 
+            } else if (abandonRate > 0.5) {
+                // 结构恶劣：经常被中途放弃或抵触
+                grade = 'D';
+                verdict = '结构恶劣指令，经常半途而废，亟待大修或重新拆解';
+                scoreColor = 'text-orange-500';
+                bgColor = 'bg-orange-950/20 border-orange-900/50';
+                rawScore = 30 + Math.floor((1 - abandonRate) * 30);
+            } else {
+                // 运转正常：根据完成率与时间适中度给出 S, A, B 线性动态分
+                let timeScore = 0;
+                if (timeRatio >= 1.0 && timeRatio <= 2.0) {
+                     timeScore = 50 - (timeRatio - 1.0) * 20; // 黄金区间，高分
+                } else if (timeRatio < 1.0 && timeRatio >= 0.3) {
+                     timeScore = 50 - (1.0 - timeRatio) * 30; // 偏快但未破底线
+                } else if (timeRatio > 2.0) {
+                     timeScore = 20 - Math.min(20, (timeRatio - 2.0) * 10); // 过分拖沓惩罚
+                }
+                
+                const completionScore = (1 - abandonRate) * 50; 
+                rawScore = Math.floor(Math.max(0, Math.min(100, timeScore + completionScore)));
+
+                if (rawScore >= 85) {
+                    grade = 'S';
+                    verdict = '流程运转顶级，核心中流砥柱指令';
+                    scoreColor = 'text-[#4af626]';
+                    bgColor = 'bg-[#4af626]/10 border-[#4af626]/40';
+                } else if (rawScore >= 70) {
+                    grade = 'A';
+                    verdict = '运转平跑健康，是防御阵列的有效工具';
+                    scoreColor = 'text-cyan-400';
+                } else {
+                    grade = 'B';
+                    verdict = '具备价值，但执行时偶有卡顿或轻微拖沓，建议关注';
+                    scoreColor = 'text-yellow-400';
+                }
+            }
+
+            let details: string[] = [];
+            if (timeRatio < 0.3 && avgItems >= 2) details.push('重度秒点盲区');
+            if (abandonRate > 0) details.push('中途弃单');
+            if (record.skippedCount > 0) details.push('遭遇强制跳过');
+            if (record.completedCount > 0 && timeRatio >= 0.5) details.push('可靠响应核验');
+
+            const uniqueDetailsMap = new Map<string, number>();
+            details.forEach(d => uniqueDetailsMap.set(d, (uniqueDetailsMap.get(d) || 0) + 1));
+            const detailsStr = Array.from(uniqueDetailsMap.entries()).map(([k, v]) => `${k}`).join(' | ');
+
+            return {
+              name: action.name,
+              type: action.type,
+              shown: record.shownCount,
+              completed: record.completedCount,
+              skipped: record.skippedCount,
+              avgTime: avgTimeSec.toFixed(1),
+              rawScore,
+              grade,
+              scoreColor, bgColor,
+              verdict,
+              detailsStr,
+              mctRatio: (timeRatio * 100).toFixed(0) + '%'
+            };
+          }).sort((a, b) => {
+             const grades = ['S', 'A', 'B', 'C', 'D', 'F'];
+             return grades.indexOf(a.grade) - grades.indexOf(b.grade) || b.rawScore - a.rawScore;
+          });
+
+          // Build Detailed Military Text Logs for Export
+          const generateReportText = () => {
+             let text = `===============================================\n`;
+             text += `【 T.A.C.T.I.C.S 】 MCT 战算法则力学驱动评估日志 // V7.1 FINAL\n`;
+             text += `===============================================\n`;
+             text += `>>> [基本元数据统计]\n`;
+             text += `防区推演周期: ${Math.floor((Date.now() - sessionStats.startTime) / 60000)} MIN\n`;
+             text += `主动触发请求总量: ${sessionStats.activeProcessed} 次\n`;
+             text += `被动应急阻断总量: ${sessionStats.passiveProcessed} 次\n`;
+             text += `轮询定时接管总量: ${sessionStats.timerProcessed} 次\n`;
+             text += `防御违规 (强制跳过): ${sessionStats.skippedProcessed} 次\n`;
+             
+             const avgAll = sessionStats.responseTimeMsList.length > 0
+                ? (sessionStats.responseTimeMsList.reduce((a, b) => a + b, 0) / sessionStats.responseTimeMsList.length / 1000).toFixed(1)
+                : "N/A";
+             text += `全量决策平均响应时间 (全局均值): ${avgAll} Sec\n\n`;
+
+             text += `>>> [硬核 MCT 分析：去伪存真筛选排查]\n`;
+             text += `===============================================\n`;
+             rankings.forEach((r, idx) => {
+               text += `#${idx + 1} | [${r.type}] ${r.name}\n`;
+               text += `    > MCT 评定等级: [ ${r.grade} ] (参考总积分: ${r.rawScore})\n`;
+               text += `    > 系统宣判: ${r.verdict}\n`;
+               if (r.shown > 0) {
+                 text += `    > 实际用时: ${r.avgTime}s (所占预估 MCT 基准时间率: ${r.mctRatio})\n`;
+                 text += `    > 实战数据: 触发 ${r.shown} 次 | 核验归档 ${r.completed} 次 | 抵触放弃 ${r.skipped} 次\n`;
+                 if (r.detailsStr) text += `    > 指令画像溯源: ${r.detailsStr}\n`;
+               } else {
+                 text += `    > 实战数据: [冷板凳指令] 未收到任何调令与核点操作。\n`;
+               }
+               text += `\n`;
+             });
+             text += `===============================================\n`;
+             text += `* 判决书说明：评估彻底引入 Mean Completion Time 预估基底时间轴。那些靠“秒点”“盲按”的组件被归位毒药且被斩断分数，彻底封死作弊空间。\n`;
+             return text;
+          };
+
+          return (
+          <div className="flex justify-center p-4 min-h-[60vh]">
+            <div className="w-full max-w-6xl border border-cyan-500/50 bg-black/80 shadow-[0_0_50px_rgba(0,255,255,0.05)] p-5 md:p-8 animate-fadeInUp flex flex-col lg:flex-row gap-6 md:gap-8">
+              
+              {/* === 左侧概述与导出 === */}
+              <div className="flex-1 space-y-6 flex flex-col max-w-[400px]">
+                <div>
+                  <h2 className="text-3xl font-black text-cyan-400 uppercase tracking-widest mb-1 font-mono flex items-center gap-3">
+                    <span className="w-2 h-8 bg-cyan-500"></span>
+                    MCT 指令架构评估
+                  </h2>
+                  <p className="text-gray-500 text-[10px] md:text-xs tracking-wider uppercase font-mono mb-4 pl-5">
+                    ALGORITHMIC POST-ACTION REPORT
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-left">
+                   <div className="border border-cyan-900/50 bg-cyan-950/20 p-4">
+                    <div className="text-[10px] text-gray-500 mb-1 font-mono uppercase tracking-widest">在岗推演时长</div>
+                    <div className="text-2xl font-black text-cyan-300 font-mono">
+                      {Math.floor((Date.now() - sessionStats.startTime) / 60000)}<span className="text-[10px] text-gray-400 ml-1">MIN</span>
+                    </div>
+                  </div>
+
+                  <div className="border border-cyan-900/50 bg-cyan-950/20 p-4">
+                    <div className="text-[10px] text-gray-500 mb-1 font-mono uppercase tracking-widest">全局大盘阅览速</div>
+                    <div className="text-2xl font-black text-white font-mono">
+                      {sessionStats.responseTimeMsList.length > 0
+                        ? (sessionStats.responseTimeMsList.reduce((a, b) => a + b, 0) / sessionStats.responseTimeMsList.length / 1000).toFixed(1)
+                        : "N/A"}
+                      <span className="text-[10px] text-gray-400 ml-1">Sec</span>
+                    </div>
+                  </div>
+
+                  <div className="border border-[#4af626]/30 bg-[#4af626]/5 p-4">
+                    <div className="text-[10px] text-[#4af626]/70 mb-1 font-mono uppercase tracking-widest">响应完成指令簇</div>
+                    <div className="text-2xl font-black text-[#4af626] font-mono">
+                      {sessionStats.activeProcessed + sessionStats.passiveProcessed + sessionStats.timerProcessed} 
+                      <span className="text-[10px] text-gray-500 ml-2">条目</span>
+                    </div>
+                  </div>
+
+                  <div className="border border-red-900/50 bg-red-950/20 p-4">
+                    <div className="text-[10px] text-red-500/70 mb-1 font-mono uppercase tracking-widest">强制跳过预警极值</div>
+                    <div className="text-2xl font-black text-red-400 font-mono">
+                      {sessionStats.skippedProcessed}
+                      <span className="text-[10px] text-gray-500 ml-2">次</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-[10px] text-gray-400 border-l border-cyan-900 pl-3 py-1 font-mono mt-4 mb-4 leading-relaxed bg-cyan-950/5">
+                  评判法则说明: &gt; <span className="text-red-400 font-bold">F级</span>：低于合理阅读基期秒点。<span className="text-orange-500 font-bold">D级</span>：放弃率超50%。<span className="text-gray-500 font-bold">C级</span>：全程无人问津。只有健康响应时长及核定完毕方可登入S列。
+                </div>
+
+                <div className="mt-auto space-y-3 pt-4 border-t border-cyan-900/30">
+                  <button
+                    onClick={() => {
+                      playSynthSound('success');
+                      navigator.clipboard.writeText(generateReportText());
+                      addLog("分析记录已成功导出！文本已复制包含全部日志内容。", "SUCCESS");
+                    }}
+                    className="w-full py-4 bg-cyan-950/40 border border-cyan-500 text-cyan-400 font-bold text-sm uppercase tracking-widest hover:bg-cyan-500 hover:text-black transition-all cursor-pointer shadow-[0_0_15px_rgba(0,255,255,0.15)] flex justify-center items-center gap-2"
+                  >
+                    <span>导出算法判决文书 & 日志溯源</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      playSynthSound('click');
+                      setCurrentView('menu');
+                      setSessionStats(null);
+                      setSelectedDivIdx(null);
+                    }}
+                    className="w-full py-3 bg-transparent border border-gray-700 text-gray-400 font-bold text-xs uppercase tracking-widest hover:bg-gray-800 hover:text-gray-200 transition-all cursor-pointer"
+                  >
+                    卸下指挥权，退回大本营
+                  </button>
+                </div>
+              </div>
+
+              {/* === 右侧长列表 Ranking Panel === */}
+              <div className="flex-1 w-full border border-cyan-900/40 bg-black/40 p-1 flex flex-col max-h-[75vh]">
+                <div className="text-[10px] md:text-xs text-cyan-500 font-bold p-3 flex items-center justify-between border-b border-cyan-900/50 bg-cyan-950/20 font-mono">
+                  <span>多维动态指令生态评测排行榜 (Grade / Score)</span>
+                </div>
+                
+                <div className="overflow-y-auto flex-1 p-2 space-y-2.5">
+                  {rankings.map((r, i) => (
+                    <div key={i} className={`p-4 border font-mono transition-all group ${r.bgColor} relative overflow-hidden`}>
+                       {/* 评分大水印标记 */}
+                       <div className="absolute right-[-10px] top-[-5px] text-[80px] font-black opacity-[0.03] select-none pointer-events-none z-0 tracking-tighter">
+                          {r.grade}
+                       </div>
+
+                       <div className="flex items-start justify-between min-w-0 relative z-10">
+                         <div className="min-w-0 flex-1 pr-4">
+                           <div className="flex items-center gap-2 mb-2">
+                             <span className={`text-[10px] font-bold px-1.5 bg-black shrink-0 border ${r.type === '轮询定时' ? 'text-fuchsia-400 border-fuchsia-900' : (r.type === '被动' ? 'text-[#ffb000] border-[#ffb000]/50' : 'text-cyan-500 border-cyan-900')} `}>
+                               {r.type}
+                             </span>
+                             <span className={`font-bold truncate text-sm tracking-wider ${r.scoreColor}`}>{r.name}</span>
+                           </div>
+                           <div className={`text-xs font-bold w-fit px-1 ${r.grade === 'F' ? 'bg-red-950 text-red-500' : 'text-gray-400'}`}>
+                              判决理由: {r.verdict}
+                           </div>
+                         </div>
+                         <div className="flex flex-col items-end shrink-0 pl-2">
+                            <span className="text-gray-500 text-[10px] uppercase tracking-wider mb-1">MCT Rank</span>
+                            <div className="flex items-baseline gap-1">
+                               <span className={`text-3xl font-black ${r.scoreColor} leading-none`}>{r.grade}</span>
+                               <span className="text-[10px] text-gray-500 bg-black border border-gray-800 px-1 py-0.5">{r.rawScore} pt.</span>
+                            </div>
+                         </div>
+                       </div>
+                       
+                       <div className="mt-4 pt-3 border-t border-white/10 flex flex-col gap-2 relative z-10">
+                         {r.shown > 0 ? (
+                           <>
+                             <div className="flex flex-wrap items-center justify-between text-xs text-gray-400 gap-y-2">
+                               <span>
+                                 触:<span className="text-white ml-0.5 font-bold">{r.shown}</span> / 
+                                 完:<span className="text-[#4af626] ml-0.5 font-bold">{r.completed}</span> / 
+                                 摒弃:<span className="text-red-400 ml-0.5 font-bold">{r.skipped}</span>
+                               </span>
+                               <span className="flex items-center gap-2">
+                                 <span>均耗时 <span className={`font-bold ${r.grade === 'F' ? 'text-red-400' : 'text-white'}`}>{r.avgTime}s</span></span>
+                                 <span className="bg-black border border-gray-800 px-1 text-[10px]">时间利用度 <span className={r.grade === 'F' ? 'text-red-400' : 'text-cyan-400'}>{r.mctRatio}</span></span>
+                               </span>
+                             </div>
+                             {r.detailsStr && (
+                               <div className="text-[10px] text-[#ffb000]/80 mt-1 uppercase tracking-widest break-words leading-relaxed bg-[#ffb000]/10 px-2 py-1 inline-block border-l-2 border-[#ffb000]">
+                                 画像特征溯源: {r.detailsStr}
+                               </div>
+                             )}
+                           </>
+                         ) : (
+                           <div className="text-xs text-gray-600/70 tracking-widest uppercase italic bg-black/50 p-2 border border-gray-800/50">
+                              -- 无有效交战日志 / NO DATUM LOGS --
+                           </div>
+                         )}
+                       </div>
+                    </div>
+                  ))}
+                  {rankings.length === 0 && (
+                     <div className="text-xs text-gray-600 text-center py-10 font-mono">该防区未侦测到任何预设防卫指令规程与全局轮询定时器。</div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </div>
+          );
+        })()}
 
         {/* ================= VIEW 3: ARMORY CONFIG & DESIGNS ================= */}
         {currentView === 'editor' && (
@@ -3388,7 +3798,7 @@ export default function App() {
                  <div
                    onClick={() => {
                      playSynthSound('click');
-                     setActiveChecklist(null);
+                     handleCloseActiveChecklist(false);
                    }}
                    className={`relative border-2 ${activeChecklist.isTimer ? "border-fuchsia-500 shadow-[0_0_15px_rgba(217,70,239,0.25)]" : "border-[#ffb000] shadow-[0_0_15px_rgba(255,176,0,0.25)]"} bg-black/95 p-3.5 select-none animate-flicker-ambient cursor-pointer hover:border-white transition-all rounded-xs`}
                    title="点击快速关闭"
@@ -3556,7 +3966,7 @@ export default function App() {
                 {/* High comfort close touch target - hidden during Level 3 lock until all done */}
                 {!(activeChecklist.level === 3 && !activeChecklist.isTimer && !activeChecklist.items.every(it => it.done)) ? (
                   <button
-                    onClick={() => { playSynthSound('click'); setActiveChecklist(null); }}
+                    onClick={() => { playSynthSound('click'); handleCloseActiveChecklist(false); }}
                     className={`absolute right-0 top-0 bottom-0 w-12 h-full flex items-center justify-center border-l bg-black/10 hover:bg-black/25 font-extrabold text-lg cursor-pointer transition-all duration-150 ${
                       activeChecklist.isTimer ? 'border-fuchsia-900/40 text-fuchsia-400' : 'border-[#4af626]/25 text-black'
                     }`}
@@ -3629,7 +4039,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       playSynthSound('success');
-                      setActiveChecklist(null);
+                      handleCloseActiveChecklist(true);
                       addLog(`前线例行安全排雷完毕，对应指令「${activeChecklist.title}」已核准释放。`, "SUCCESS");
                     }}
                     disabled={!activeChecklist.items.every(it => it.done)}
@@ -3835,31 +4245,54 @@ export default function App() {
                     目前由于公共库尚未建立，无法克隆。
                   </div>
                 ) : (
-                  appData.library.map((libItem) => (
-                    <button
-                      key={libItem.id}
-                      onClick={() => handlePickFromLibrary(libItem)}
-                      className={`w-full text-left p-3 border transition-all cursor-pointer flex justify-between items-center group relative ${borderLeftAccent(libItem.color)}`}
-                    >
-                      <div className="pr-3">
-                        <div className="text-xs font-bold text-gray-300 group-hover:text-[#4af626] transition-all truncate">{libItem.name}</div>
-                        <div className="text-[9px] text-gray-500 mt-0.5 line-clamp-1">包含细项: {libItem.items.join(' | ')}</div>
-                      </div>
-                      <span className="text-[10px] b-t shrink-0 border border-[#ffb000]/60 text-[#ffb000] px-1.5 py-0.5 group-hover:bg-[#ffb000]/10 font-bold uppercase tracking-wider">
-                        克隆条目
-                      </span>
-                    </button>
-                  ))
+                  appData.library.map((libItem) => {
+                    const isSelected = selectedLibItemIds.includes(libItem.id);
+                    return (
+                      <button
+                        key={libItem.id}
+                        onClick={() => {
+                          playSynthSound('click');
+                          setSelectedLibItemIds(prev => 
+                            isSelected ? prev.filter(id => id !== libItem.id) : [...prev, libItem.id]
+                          );
+                        }}
+                        className={`w-full text-left p-3 border transition-all cursor-pointer flex justify-between items-center group relative ${borderLeftAccent(libItem.color)} ${isSelected ? 'bg-[#ffb000]/10 border-[#ffb000]' : 'border-gray-800 hover:border-gray-600'}`}
+                      >
+                        <div className="pr-3 flex items-center space-x-3">
+                          <div className={`w-4 h-4 border flex items-center justify-center shrink-0 transition-all ${isSelected ? 'border-[#ffb000] bg-[#ffb000]/30' : 'border-gray-600'}`}>
+                            {isSelected && <div className="w-2 h-2 bg-[#ffb000]" />}
+                          </div>
+                          <div>
+                            <div className={`text-xs font-bold transition-all truncate ${isSelected ? 'text-[#ffb000]' : 'text-gray-300 group-hover:text-white'}`}>{libItem.name}</div>
+                            <div className="text-[9px] text-gray-500 mt-0.5 line-clamp-1">包含细项: {libItem.items.join(' | ')}</div>
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })
                 )}
               </div>
 
-              <div className="pt-1 flex justify-end">
-                <button
-                  onClick={() => setLibPickerOpen(null)}
-                  className="px-4 py-2 border border-gray-700 hover:bg-gray-850 text-xs text-gray-400 font-bold cursor-pointer"
-                >
-                  取消导入
-                </button>
+              <div className="pt-2 flex justify-between items-center">
+                <div className="text-xs text-gray-500">已选择 {selectedLibItemIds.length} 项</div>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => {
+                      setLibPickerOpen(null);
+                      setSelectedLibItemIds([]);
+                    }}
+                    className="px-4 py-2 border border-gray-700 hover:bg-gray-850 text-xs text-gray-400 font-bold cursor-pointer transition-all"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handlePickFromLibrary}
+                    disabled={selectedLibItemIds.length === 0}
+                    className={`px-4 py-2 text-xs font-bold transition-all cursor-pointer border ${selectedLibItemIds.length > 0 ? 'bg-[#ffb000] text-black border-[#ffb000] hover:bg-[#ffb000]/80' : 'bg-gray-800 text-gray-600 border-gray-800'}`}
+                  >
+                    导入所选
+                  </button>
+                </div>
               </div>
             </div>
           </div>
