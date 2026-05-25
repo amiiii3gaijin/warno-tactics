@@ -1,0 +1,191 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #020702;
+    color: #4af626;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    overflow-x: hidden;
+  }
+}
+
+/* CRT 扫描线特效 */
+.crt-lines::after {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.2) 50%);
+  background-size: 100% 4px;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+/* 精密雷达扫描环网背景效果 */
+.bg-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(74, 246, 38, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(74, 246, 38, 0.04) 1px, transparent 1px);
+}
+
+/* 越确认越闪耀的呼吸边框 */
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(74, 246, 38, 0.15), inset 0 0 5px rgba(74, 246, 38, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(74, 246, 38, 0.45), inset 0 0 15px rgba(74, 246, 38, 0.25);
+  }
+}
+
+.pulsing-border-green {
+  animation: pulseGlow 2s infinite ease-in-out;
+}
+
+/* 故障抖动文本 (Glitch) 极简点缀 */
+@keyframes micro-flicker {
+  0% { opacity: 0.98; }
+  50% { opacity: 1; }
+  100% { opacity: 0.99; }
+}
+
+.flicker-ambient {
+  animation: micro-flicker 3s infinite;
+}
+
+/* 红色战术呼吸警戒线 */
+@keyframes pulseRedAlert {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.99);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+}
+
+.pulsing-alert-red {
+  animation: pulseRedAlert 2.5s infinite ease-in-out;
+}
+
+/* 定时巡检雷达扫描横条 */
+@keyframes scanLine {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.35;
+  }
+  85% {
+    opacity: 0.35;
+  }
+  100% {
+    transform: translateY(280px);
+    opacity: 0;
+  }
+}
+
+.pulsing-border-timer {
+  animation: timerGlow 2s infinite ease-in-out;
+}
+
+@keyframes timerGlow {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(217, 70, 239, 0.25), inset 0 0 5px rgba(217, 70, 239, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(217, 70, 239, 0.65), inset 0 0 15px rgba(217, 70, 239, 0.35);
+  }
+}
+
+/* 战术全域3级呼吸灯强闪光 */
+@keyframes hazardFlash {
+  0%, 100% {
+    opacity: 0.15;
+    background-color: rgba(239, 68, 68, 0.12);
+    box-shadow: inset 0 0 40px rgba(239, 68, 68, 0.25);
+  }
+  50% {
+    opacity: 0.45;
+    background-color: rgba(239, 68, 68, 0.3);
+    box-shadow: inset 0 0 80px rgba(239, 68, 68, 0.6);
+  }
+}
+
+/* 战术暗黑主题全局滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 255, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 255, 0.5);
+}
+
+/* 战术暗黑主题滑块 (Range Sliders) */
+input[type=range] {
+  -webkit-appearance: none;
+  width: 100%;
+  background: transparent;
+  height: 4px;
+}
+input[type=range]:focus {
+  outline: none;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  cursor: pointer;
+  background: rgba(0, 255, 255, 0.2);
+  border-radius: 2px;
+  border: 1px solid rgba(0, 255, 255, 0.1);
+}
+input[type=range]::-webkit-slider-thumb {
+  height: 14px;
+  width: 8px;
+  border-radius: 1px;
+  background: #00ffff;
+  cursor: pointer;
+  -webkit-appearance: none;
+  margin-top: -6px;
+  box-shadow: 0 0 8px rgba(0, 255, 255, 0.6);
+  transition: all 0.2s;
+}
+input[type=range]::-webkit-slider-thumb:hover {
+  background: #fff;
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.9);
+}
+input[type=range]::-moz-range-track {
+  width: 100%;
+  height: 4px;
+  cursor: pointer;
+  background: rgba(0, 255, 255, 0.2);
+  border-radius: 2px;
+}
+input[type=range]::-moz-range-thumb {
+  height: 14px;
+  width: 8px;
+  border-radius: 1px;
+  background: #00ffff;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 8px rgba(0, 255, 255, 0.6);
+  transition: all 0.2s;
+}
+input[type=range]::-moz-range-thumb:hover {
+  background: #fff;
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.9);
+}
+
+

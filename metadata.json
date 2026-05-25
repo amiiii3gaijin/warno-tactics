@@ -1,0 +1,8 @@
+{
+  "name": "Remix: WARNO 战术辅助终端",
+  "description": "提供硬核军事化的战术检查、双屏协同主动/被动危机响应、TTS语音警报与通用指令模板的WARNO 2.0战术终端系统。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
