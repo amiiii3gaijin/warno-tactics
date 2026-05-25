@@ -246,6 +246,7 @@ const DEFAULT_SETTINGS = {
   pitch: 5,
   modalSize: 1, // 0: Compact, 1: Medium, 2: Large, 3: Full Screen
   fontSize: 1, // 0: Small, 1: Medium, 2: Large, 3: XL
+  enableSwipeBack: true, // Allow disabling swipe to exit logic for touch devices (iPad input safety)
 };
 
 export default function App() {
@@ -292,7 +293,31 @@ export default function App() {
   // ================= STATE MANAGEMENT =================
   const [appData, setAppData] = useState<AppData>(() => {
     const raw = localStorage.getItem('warno_hot_sync_data');
-    return raw ? JSON.parse(raw) : JSON.parse(JSON.stringify(DEFAULT_APP_DATA));
+    let parsedData = raw ? JSON.parse(raw) : JSON.parse(JSON.stringify(DEFAULT_APP_DATA));
+
+    // Sanitization: Ensure all IDs in the tree are globally unique to prevent duplicate key errors in React
+    const generateId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const seenMap = new Set<string>();
+    const dedupeId = (obj: any, prefix: string) => {
+      if (!obj.id || seenMap.has(obj.id)) {
+        obj.id = generateId(prefix);
+      }
+      seenMap.add(obj.id);
+      return obj;
+    };
+
+    if (parsedData.divisions) {
+      parsedData.divisions = parsedData.divisions.map((div: any) => {
+        dedupeId(div, 'div');
+        if (div.active) div.active = div.active.map((act: any) => dedupeId(act, 'act'));
+        if (div.passive) div.passive = div.passive.map((act: any) => dedupeId(act, 'act'));
+        return div;
+      });
+    }
+    if (parsedData.globalTimers) parsedData.globalTimers = parsedData.globalTimers.map((timer: any) => dedupeId(timer, 'timer'));
+    if (parsedData.library) parsedData.library = parsedData.library.map((lib: any) => dedupeId(lib, 'lib'));
+
+    return parsedData;
   });
 
   const [settings, setSettings] = useState(() => {
@@ -384,7 +409,7 @@ export default function App() {
     const dy = touchEndY - touchStartY.current;
 
     // Detect a strong right swipe (dx > 80, dy < 50)
-    if (dx > 80 && Math.abs(dy) < 50) {
+    if (settings.enableSwipeBack !== false && dx > 80 && Math.abs(dy) < 50) {
        if (currentView === 'select') setCurrentView('menu');
        else if (currentView === 'settings') setCurrentView('menu');
        else if (currentView === 'editor') {
@@ -1168,6 +1193,17 @@ export default function App() {
     if (!importDetails) return;
     const { type, payload } = importDetails;
     try {
+      const generateId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+      const regenerateAct = (act: any) => ({ ...act, id: generateId('act') });
+      const regenerateDiv = (div: any) => ({ 
+        ...div, 
+        id: generateId('div'), 
+        active: (div.active || []).map(regenerateAct), 
+        passive: (div.passive || []).map(regenerateAct) 
+      });
+      const regenerateTimer = (timer: any) => ({ ...timer, id: generateId('timer') });
+      const regenerateLib = (lib: any) => ({ ...lib, id: generateId('lib') });
+
       if (type === 'all') {
         if (mode === 'overwrite') {
           setAppData(payload);
@@ -1175,9 +1211,9 @@ export default function App() {
         } else {
           setAppData(p => ({
             ...p,
-            divisions: [...p.divisions, ...(payload.divisions || [])],
-            globalTimers: [...p.globalTimers, ...(payload.globalTimers || [])],
-            library: [...p.library, ...(payload.library || [])],
+            divisions: [...p.divisions, ...(payload.divisions || []).map(regenerateDiv)],
+            globalTimers: [...p.globalTimers, ...(payload.globalTimers || []).map(regenerateTimer)],
+            library: [...p.library, ...(payload.library || []).map(regenerateLib)],
           }));
           addLog("全端配置包部分要素安全合流追加成功！", "SUCCESS");
         }
@@ -1194,7 +1230,7 @@ export default function App() {
             addLog(`成功追加了外部导入配置的新师「${payload.name}」`, "SUCCESS");
           }
         } else {
-          setAppData(p => ({ ...p, divisions: [...p.divisions, payload] }));
+          setAppData(p => ({ ...p, divisions: [...p.divisions, regenerateDiv(payload)] }));
           addLog(`未比对到重名，已独立追加新设特遣师:「${payload.name}」`, "SUCCESS");
         }
       } else if (type === 'divsOnly') {
@@ -1202,7 +1238,7 @@ export default function App() {
           setAppData(p => ({ ...p, divisions: payload }));
           addLog("应用中已有的各项师数据被完全清理，新的配置已被写入覆盖成功", "SUCCESS");
         } else {
-          setAppData(p => ({ ...p, divisions: [...p.divisions, ...payload] }));
+          setAppData(p => ({ ...p, divisions: [...p.divisions, ...payload.map(regenerateDiv)] }));
           addLog("大量所属师项目卡要素追加部署并入网！", "SUCCESS");
         }
       } else if (type === 'timers') {
@@ -1210,7 +1246,7 @@ export default function App() {
           setAppData(p => ({ ...p, globalTimers: payload }));
           addLog("全域秒表巡回盘线已安全清除并完全覆写载入！", "SUCCESS");
         } else {
-          setAppData(p => ({ ...p, globalTimers: [...p.globalTimers, ...payload] }));
+          setAppData(p => ({ ...p, globalTimers: [...p.globalTimers, ...payload.map(regenerateTimer)] }));
           addLog("全新定时巡视时钟集合追加部署并入网！", "SUCCESS");
         }
       } else if (type === 'lib') {
@@ -1218,7 +1254,7 @@ export default function App() {
           setAppData(p => ({ ...p, library: payload }));
           addLog("公共战备备用战术通用对齐大纲库已完全覆写热装填！", "SUCCESS");
         } else {
-          setAppData(p => ({ ...p, library: [...p.library, ...payload] }));
+          setAppData(p => ({ ...p, library: [...p.library, ...payload.map(regenerateLib)] }));
           addLog("公共战备备用通用战略组件已成功拼集追加！", "SUCCESS");
         }
       }
@@ -2592,19 +2628,35 @@ export default function App() {
                             />
                           </div>
 
-                          <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center space-x-2 select-none" onClick={(e) => e.stopPropagation()}>
                             <span className="text-gray-500">播报间隔 (分钟):</span>
-                            <input
-                              type="number"
-                              value={timer.intervalMin}
-                              min={1}
-                              onChange={(e) => {
-                                const nextItems = JSON.parse(JSON.stringify(appData.globalTimers));
-                                nextItems[tIdx].intervalMin = parseInt(e.target.value) || 1;
-                                setAppData(p => ({ ...p, globalTimers: nextItems }));
-                              }}
-                              className="w-12 bg-black border border-[#00ffff]/40 p-1 text-center text-[#00ffff] focus:outline-none focus:border-[#00ffff] rounded-xs font-mono"
-                            />
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={() => {
+                                  const nextItems = JSON.parse(JSON.stringify(appData.globalTimers));
+                                  nextItems[tIdx].intervalMin = Math.max(1, (nextItems[tIdx].intervalMin || 2) - 1);
+                                  setAppData(p => ({ ...p, globalTimers: nextItems }));
+                                }}
+                                className="w-6 h-6 flex items-center justify-center bg-gray-900 border border-[#00ffff]/40 text-[#00ffff] rounded hover:bg-[#00ffff]/20 active:scale-95 transition-transform"
+                                type="button"
+                              >
+                                -
+                              </button>
+                              <div className="w-10 text-center text-[#00ffff] font-mono font-bold">
+                                {timer.intervalMin}
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const nextItems = JSON.parse(JSON.stringify(appData.globalTimers));
+                                  nextItems[tIdx].intervalMin = (nextItems[tIdx].intervalMin || 0) + 1;
+                                  setAppData(p => ({ ...p, globalTimers: nextItems }));
+                                }}
+                                className="w-6 h-6 flex items-center justify-center bg-gray-900 border border-[#00ffff]/40 text-[#00ffff] rounded hover:bg-[#00ffff]/20 active:scale-95 transition-transform"
+                                type="button"
+                              >
+                                +
+                              </button>
+                            </div>
                             
                             <button
                               onClick={() => deleteGlobalTimer(tIdx)}
@@ -3225,6 +3277,40 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Section 2.6: Swipe to Go Back */}
+                <div className="space-y-3">
+                  <div className="border-b border-gray-900 pb-2">
+                    <span className="text-xs font-bold text-gray-300">✋ 触控防误触设置 (iPad/平板适配)</span>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={() => {
+                        setSettings(prev => ({ ...prev, enableSwipeBack: !prev.enableSwipeBack }));
+                        playSynthSound('click');
+                      }}
+                      className={`p-3 text-left border rounded-xs transition-all cursor-pointer ${
+                        settings.enableSwipeBack !== false
+                          ? 'border-[#ffb000]/40 bg-[#ffb000]/10 text-gray-200'
+                          : 'border-red-950 bg-black/40 text-gray-500 hover:border-gray-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold font-mono">
+                           允许全屏侧滑返回 (Swipe to back)
+                        </span>
+                        <span className={`text-[10px] font-mono px-2 py-0.5 border ${
+                          settings.enableSwipeBack !== false 
+                            ? 'border-[#ffb000] text-[#ffb000] bg-black' 
+                            : 'border-red-900 text-red-500 bg-red-950/20'
+                        }`}>
+                          {settings.enableSwipeBack !== false ? '✅ 已开启' : '❌ 已禁用 (防误触)'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">关闭此项可防止在iPad或触屏上输入文本时，因误触发滑动导致当场退出的问题。</p>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Section 3: Audio Tests & Reset */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 font-mono">
                   <div className="space-y-2 border border-blue-950/25 bg-blue-950/5 p-3 rounded-xs text-left">
@@ -3352,12 +3438,14 @@ export default function App() {
           <div
             onClick={(e) => {
               if (e.target === e.currentTarget) {
+                // Background clicking intentionally disabled for safety and to prevent
+                // accidental modal closure when iPad keyboard pops up.
                 playSynthSound('click');
                 if (activeChecklist.level === 3 && !activeChecklist.isTimer && !activeChecklist.items.every(it => it.done)) {
                   playSynthSound('alarm');
                   addLog(`[保全拦截] 战区特级强锁清单「${activeChecklist.title}」含有严重安全威胁，背景关闭被熔断！请依次核检以下细项！`, "DANGER");
                 } else {
-                  addLog(`[保全拦截] 战区强锁核算清单「${activeChecklist.title}」未完全核检验收，严禁跳过点击背景退出！`, "WARN");
+                  addLog(`提示：点击外部退出已被锁定，请通过右上角或底部的明确操作按钮退出（以防止触屏误触或键盘触发退出）。`, "WARN");
                 }
               }
             }}
