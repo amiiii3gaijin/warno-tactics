@@ -245,6 +245,7 @@ const DEFAULT_SETTINGS = {
   rate: 6,
   pitch: 5,
   modalSize: 1, // 0: Compact, 1: Medium, 2: Large, 3: Full Screen
+  fontSize: 1, // 0: Small, 1: Medium, 2: Large, 3: XL
 };
 
 export default function App() {
@@ -354,6 +355,53 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('warno_hot_sync_settings', JSON.stringify(settings));
   }, [settings]);
+
+  // Global Font Scaling System
+  useEffect(() => {
+    const fs = settings.fontSize ?? 1;
+    let size = '16px'; // default
+    if (fs === 0) size = '12px';
+    if (fs === 1) size = '16px';
+    if (fs === 2) size = '20px';
+    if (fs === 3) size = '24px';
+    document.documentElement.style.fontSize = size;
+  }, [settings.fontSize]);
+
+  // Global horizontal swipe detector for "Back"
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || touchStartY.current === null) return;
+    const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
+    const dx = touchEndX - touchStartX.current;
+    const dy = touchEndY - touchStartY.current;
+
+    // Detect a strong right swipe (dx > 80, dy < 50)
+    if (dx > 80 && Math.abs(dy) < 50) {
+       if (currentView === 'select') setCurrentView('menu');
+       else if (currentView === 'settings') setCurrentView('menu');
+       else if (currentView === 'editor') {
+         if (editorSubView === 'detail' || (editorSubView !== 'master' && editorSubView !== 'io')) {
+            setEditorSubView('master');
+            setEditingDivIdx(null);
+         } else {
+            setCurrentView('menu');
+         }
+       } else if (currentView === 'dash') {
+         // Usually we don't accidentally close dash since it's a critical live panel,
+         // but if requested, we could trigger exit confirm. Let's omit it for safety during active dash.
+       }
+    }
+    touchStartX.current = null;
+    touchStartY.current = null;
+  };
 
   // Click on screen layout to clear L1 Broadcast toasts (Point 3: clicking on raw screen dismisses them)
   useEffect(() => {
@@ -1050,7 +1098,8 @@ export default function App() {
     const raw = importText.trim();
     if (!raw) return;
     try {
-      if (raw.startsWith('WARNO-HOTS-ALL::')) {
+      const lowerRaw = raw.toLowerCase();
+      if (lowerRaw.startsWith('warno-hots-all::')) {
         const payload = JSON.parse(decodeURIComponent(atob(raw.substring('WARNO-HOTS-ALL::'.length))));
         if (!payload || !payload.divisions) throw new Error("Invalid format");
         setImportDetails({
@@ -1061,7 +1110,7 @@ export default function App() {
           payload
         });
         playSynthSound('click');
-      } else if (raw.startsWith('WARNO-HOTS-DIV::')) {
+      } else if (lowerRaw.startsWith('warno-hots-div::')) {
         const payload = JSON.parse(decodeURIComponent(atob(raw.substring('WARNO-HOTS-DIV::'.length))));
         if (!payload || !payload.name) throw new Error("Invalid format");
         setImportDetails({
@@ -1072,7 +1121,7 @@ export default function App() {
           payload
         });
         playSynthSound('click');
-      } else if (raw.startsWith('WARNO-HOTS-TIMERS::')) {
+      } else if (lowerRaw.startsWith('warno-hots-timers::')) {
         const payload = JSON.parse(decodeURIComponent(atob(raw.substring('WARNO-HOTS-TIMERS::'.length))));
         if (!Array.isArray(payload)) throw new Error("Invalid format");
         setImportDetails({
@@ -1083,7 +1132,7 @@ export default function App() {
           payload
         });
         playSynthSound('click');
-      } else if (raw.startsWith('WARNO-HOTS-DIVSONLY::')) {
+      } else if (lowerRaw.startsWith('warno-hots-divsonly::')) {
         const payload = JSON.parse(decodeURIComponent(atob(raw.substring('WARNO-HOTS-DIVSONLY::'.length))));
         if (!Array.isArray(payload)) throw new Error("Invalid format");
         setImportDetails({
@@ -1094,7 +1143,7 @@ export default function App() {
           payload
         });
         playSynthSound('click');
-      } else if (raw.startsWith('WARNO-HOTS-LIB::')) {
+      } else if (lowerRaw.startsWith('warno-hots-lib::')) {
         const payload = JSON.parse(decodeURIComponent(atob(raw.substring('WARNO-HOTS-LIB::'.length))));
         if (!Array.isArray(payload)) throw new Error("Invalid format");
         setImportDetails({
@@ -1269,7 +1318,10 @@ export default function App() {
   );
 
   return (
-    <div className={`min-h-screen relative flex flex-col selection:bg-[#4af626] selection:text-black font-mono select-none crt-lines pb-8 ${
+    <div 
+      onTouchStart={handleTouchStart} 
+      onTouchEnd={handleTouchEnd}
+      className={`min-h-screen relative flex flex-col selection:bg-[#4af626] selection:text-black font-mono select-none crt-lines pb-8 ${
       currentView === 'menu' ? 'bg-black' : 'bg-[#020702] bg-grid'
     }`}>
 
@@ -2950,6 +3002,17 @@ export default function App() {
                 <div className="space-y-2 border border-[#00ffff]/50 p-4 bg-cyan-950/10">
                   <div className="flex items-center justify-between mb-1">
                      <span className="text-xs text-[#00ffff]/80 font-bold">▶ 信道导入密文框:</span>
+                     <button
+                        onClick={() => {
+                          setImportText('');
+                          setImportDetails(null);
+                          playSynthSound('click');
+                        }}
+                        disabled={!importText}
+                        className="text-[10px] sm:text-xs text-gray-400 hover:text-white px-2 py-0.5 border border-gray-700 hover:border-gray-500 rounded disabled:opacity-30 transition-all cursor-pointer"
+                     >
+                        [ 一键清空 ]
+                     </button>
                   </div>
                   <textarea
                     value={importText}
@@ -3123,6 +3186,37 @@ export default function App() {
                           settings.modalSize === sizes.v
                             ? 'bg-[#00ffff]/20 border-[#00ffff] text-[#00ffff] shadow-[0_0_10px_rgba(0,255,255,0.15)]'
                             : 'border-gray-850 bg-black/40 text-gray-400 hover:border-[#00ffff]/30 hover:text-[#00ffff]/80'
+                        }`}
+                      >
+                        {sizes.l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Section 2.5: Global Font Size */}
+                <div className="space-y-3">
+                  <div className="border-b border-gray-900 pb-2">
+                    <span className="text-xs font-bold text-gray-300">🔎 全局字体大小 (适配移动端)</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[
+                      { l: '小号 (Small)', v: 0 },
+                      { l: '正常 (Medium)', v: 1 },
+                      { l: '大号 (Large)', v: 2 },
+                      { l: '超大 (XL)', v: 3 }
+                    ].map((sizes) => (
+                      <button
+                        key={sizes.v}
+                        onClick={() => {
+                          setSettings(prev => ({ ...prev, fontSize: sizes.v }));
+                          playSynthSound('click');
+                          addLog(`全局字体大小已修改。`, "INFO");
+                        }}
+                        className={`py-2 px-1 text-[10px] sm:text-xs font-bold font-mono transition-all border rounded-xs cursor-pointer ${
+                          settings.fontSize === sizes.v
+                            ? 'bg-[rgba(74,246,38,0.2)] border-[#4af626] text-[#4af626] shadow-[0_0_10px_rgba(74,246,38,0.15)]'
+                            : 'border-gray-850 bg-black/40 text-gray-400 hover:border-[#4af626]/30 hover:text-[#4af626]/80'
                         }`}
                       >
                         {sizes.l}
